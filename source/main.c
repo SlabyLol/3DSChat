@@ -45,6 +45,25 @@ static void push_message(const char *name, const char *text)
     snprintf(m->time_str, sizeof(m->time_str), "%02u:%02u:%02u", hh, mm, ss);
 }
 
+/* ── 3DS Tastatur-Eingabe ─────────────────────────────────────────── */
+static void ds_send_message(void)
+{
+    SwkbdState swkbd;
+    char input[MSG_LEN];
+
+    swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, MSG_LEN - 1);
+    swkbdSetHintText(&swkbd, "Nachricht eingeben...");
+    swkbdSetButton(&swkbd, SWKBD_BUTTON_LEFT,  "Abbrechen", false);
+    swkbdSetButton(&swkbd, SWKBD_BUTTON_RIGHT, "Senden",    true);
+    swkbdSetValidation(&swkbd, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+
+    SwkbdButton btn = swkbdInputText(&swkbd, input, sizeof(input));
+    if (btn == SWKBD_BUTTON_RIGHT && input[0] != '\0') {
+        push_message("3DS", input);
+        printf("\033[1;35m[3DS]\033[0m %s\n", input);
+    }
+}
+
 static void url_decode(const char *src, char *dst, size_t dstlen)
 {
     size_t i = 0;
@@ -78,7 +97,6 @@ static void html_escape(const char *src, char *dst, size_t dstlen)
     dst[i] = '\0';
 }
 
-/* Build entire HTML body into buf, return length */
 static int build_html(char *buf, int bufsz)
 {
     int n = 0;
@@ -95,8 +113,10 @@ static int build_html(char *buf, int bufsz)
         "#chat{width:100%%;max-width:600px;background:#16213e;border-radius:12px;padding:16px;"
               "margin-bottom:12px;height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}"
         ".msg{background:#0f3460;border-radius:8px;padding:8px 12px}"
+        ".msg.ds{background:#1a3a1a;}"
         ".msg .meta{font-size:.75rem;color:#a0a0c0;margin-bottom:2px}"
         ".msg .meta .name{color:#e94560;font-weight:700}"
+        ".msg.ds .meta .name{color:#4caf50}"
         ".msg .body{font-size:.95rem;word-break:break-word}"
         "form{width:100%%;max-width:600px;display:flex;flex-direction:column;gap:8px}"
         "input,button{border:none;border-radius:8px;padding:10px 14px;font-size:1rem}"
@@ -110,17 +130,20 @@ static int build_html(char *buf, int bufsz)
 
     if (g_msg_count == 0) {
         n += snprintf(buf+n, bufsz-n,
-            "<p style='color:#556;margin:auto'>Noch keine Nachrichten. Sag Hallo! &#128075;</p>");
+            "<p style='color:#556;margin:auto'>Noch keine Nachrichten &#128075;</p>");
     }
 
     for (int i = 0; i < g_msg_count; i++) {
         char sname[NAME_LEN*6], stext[MSG_LEN*6];
         html_escape(g_msgs[i].name, sname, sizeof(sname));
         html_escape(g_msgs[i].text, stext, sizeof(stext));
+        int is3ds = (strcmp(g_msgs[i].name, "3DS") == 0);
         n += snprintf(buf+n, bufsz-n,
-            "<div class='msg'><div class='meta'>"
-            "<span class='name'>%s</span> &nbsp;%s</div>"
+            "<div class='msg%s'><div class='meta'>"
+            "<span class='name'>%s%s</span> &nbsp;%s</div>"
             "<div class='body'>%s</div></div>",
+            is3ds ? " ds" : "",
+            is3ds ? "&#127918; " : "",
             sname, g_msgs[i].time_str, stext);
     }
 
@@ -131,7 +154,7 @@ static int build_html(char *buf, int bufsz)
         "<input name='msg'  placeholder='Nachricht...' maxlength='199' required>"
         "<button type='submit'>Senden &#128172;</button>"
         "</form>"
-        "<p id='status'>3DS Chat &nbsp;&#10003;&nbsp; Port 7496</p>"
+        "<p id='status'>&#127918; 3DS Chat &nbsp;|&nbsp; Port 7496 &nbsp;|&nbsp; A = 3DS schreibt</p>"
         "<script>"
         "var _t=null;"
         "function _sr(){_t=setTimeout(function(){"
@@ -154,7 +177,6 @@ static void send_page(int fd)
 
     int bodylen = build_html(body, RESP_BUF);
 
-    /* Send headers with correct Content-Length so Safari doesn't hang */
     char headers[256];
     int hlen = snprintf(headers, sizeof(headers),
         "HTTP/1.1 200 OK\r\n"
@@ -167,9 +189,8 @@ static void send_page(int fd)
     send(fd, headers, hlen,    0);
     send(fd, body,    bodylen, 0);
     free(body);
-    /* wait for client to read before closing */
     shutdown(fd, SHUT_WR);
-    svcSleepThread(100000000LL); /* 100ms */
+    svcSleepThread(100000000LL);
 }
 
 static void send_redirect(int fd)
@@ -182,7 +203,7 @@ static void send_redirect(int fd)
         "\r\n";
     send(fd, r, strlen(r), 0);
     shutdown(fd, SHUT_WR);
-    svcSleepThread(50000000LL); /* 50ms */
+    svcSleepThread(50000000LL);
 }
 
 static void handle_post(int fd, const char *body)
@@ -213,7 +234,8 @@ static void handle_post(int fd, const char *body)
 
     if (dec_name[0] && dec_msg[0]) {
         push_message(dec_name, dec_msg);
-        printf("\033[1;32m[%d]\033[0m %s: %s\n", g_msg_count, g_msgs[g_msg_count-1].name, g_msgs[g_msg_count-1].text);
+        printf("\033[1;32m[%d]\033[0m %s: %s\n",
+               g_msg_count, g_msgs[g_msg_count-1].name, g_msgs[g_msg_count-1].text);
     }
 
     send_redirect(fd);
@@ -234,9 +256,7 @@ static void handle_client(int fd)
     if (total == 0) return;
     buf[total] = '\0';
 
-    int is_post = (strncmp(buf, "POST", 4) == 0);
-
-    if (!is_post) {
+    if (strncmp(buf, "POST", 4) != 0) {
         send_page(fd);
         return;
     }
@@ -244,7 +264,6 @@ static void handle_client(int fd)
     char *body = strstr(buf, "\r\n\r\n");
     if (body) body += 4; else body = "";
 
-    /* read more if body not yet arrived */
     if (strlen(body) < 4) {
         n = (int)recv(fd, buf+total, (size_t)(RECV_BUF-1-total), 0);
         if (n > 0) {
@@ -271,7 +290,8 @@ int main(void)
     myip.s_addr = gethostid();
     printf("IP:  \033[1;36m%s\033[0m\n",   inet_ntoa(myip));
     printf("URL: http://%s:%d\n\n",         inet_ntoa(myip), PORT);
-    printf("START = Beenden\n");
+    printf("\033[1;33mA\033[0m = Nachricht schreiben\n");
+    printf("\033[1;31mSTART\033[0m = Beenden\n");
     printf("----------------------------\n");
 
     push_message("3DS", "Server gestartet! Schreib etwas ^^");
@@ -299,7 +319,24 @@ int main(void)
 
     while (aptMainLoop()) {
         hidScanInput();
-        if (hidKeysDown() & KEY_START) break;
+        u32 keys = hidKeysDown();
+
+        if (keys & KEY_START) break;
+
+        /* A-Taste = Nachricht von der 3DS schreiben */
+        if (keys & KEY_A) {
+            ds_send_message();
+            /* Konsole neu zeichnen nach Tastatur */
+            consoleClear();
+            printf("\033[1;32m3DS Chat Server\033[0m\n");
+            printf("IP:  \033[1;36m%s\033[0m\n",   inet_ntoa(myip));
+            printf("URL: http://%s:%d\n\n",         inet_ntoa(myip), PORT);
+            printf("\033[1;33mA\033[0m = Nachricht schreiben\n");
+            printf("\033[1;31mSTART\033[0m = Beenden\n");
+            printf("----------------------------\n");
+            for (int i = 0; i < g_msg_count; i++)
+                printf("[%d] %s: %s\n", i+1, g_msgs[i].name, g_msgs[i].text);
+        }
 
         struct sockaddr_in cli;
         socklen_t cli_len = sizeof(cli);
