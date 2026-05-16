@@ -133,7 +133,13 @@ static int build_html(char *buf, int bufsz)
         "</form>"
         "<p id='status'>3DS Chat &nbsp;&#10003;&nbsp; Port 7496</p>"
         "<script>"
-        "setTimeout(function(){location.reload();},5000);"
+        "var _t=null;"
+        "function _sr(){_t=setTimeout(function(){"
+        "  var a=document.activeElement;"
+        "  if(!a||a.tagName!=='INPUT'){location.reload();}"
+        "  else{_sr();}"
+        "},5000);}"
+        "_sr();"
         "window.onload=function(){var c=document.getElementById('chat');c.scrollTop=c.scrollHeight;};"
         "</script>"
         "</body></html>");
@@ -205,8 +211,10 @@ static void handle_post(int fd, const char *body)
     url_decode(raw_name, dec_name, sizeof(dec_name));
     url_decode(raw_msg,  dec_msg,  sizeof(dec_msg));
 
-    if (dec_name[0] && dec_msg[0])
+    if (dec_name[0] && dec_msg[0]) {
         push_message(dec_name, dec_msg);
+        printf("\033[1;32m[%d]\033[0m %s: %s\n", g_msg_count, g_msgs[g_msg_count-1].name, g_msgs[g_msg_count-1].text);
+    }
 
     send_redirect(fd);
 }
@@ -297,7 +305,6 @@ int main(void)
         socklen_t cli_len = sizeof(cli);
         int cfd = accept(srv, (struct sockaddr*)&cli, &cli_len);
         if (cfd >= 0) {
-            printf("Verbindung: %s\n", inet_ntoa(cli.sin_addr));
             handle_client(cfd);
             close(cfd);
         }
