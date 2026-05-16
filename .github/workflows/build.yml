@@ -1,0 +1,71 @@
+name: Build 3DS Chat
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:     [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build .3dsx
+    runs-on: ubuntu-latest
+
+    container:
+      image: devkitpro/devkitarm:latest   # official devkitPro Docker image
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Build ───────────────────────────────────────────────────────
+      - name: Build 3ds-chat.3dsx
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          export DEVKITARM=/opt/devkitpro/devkitARM
+          export PATH=$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH
+          make
+
+      # ── 3. Upload artifact (every push) ───────────────────────────────
+      - name: Upload 3dsx artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3ds-chat
+          path: 3ds-chat.3dsx
+          if-no-files-found: error
+
+  # ── Release job: only on version tags (v1.0, v1.2.3 …) ──────────────
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write   # needed to create releases
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: 3ds-chat
+
+      - name: Create Release & upload 3dsx
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 3ds-chat.3dsx
+          generate_release_notes: true
+          body: |
+            ## 🎮 3DS Chat Server ${{ github.ref_name }}
+
+            ### Installation
+            1. Datei `3ds-chat.3dsx` herunterladen
+            2. Auf SD-Karte kopieren: `/3ds/3ds-chat/3ds-chat.3dsx`
+            3. Homebrew Launcher starten → App auswählen
+
+            ### Benutzen
+            - App starten → IP-Adresse oben auf dem Bildschirm ablesen
+            - Browser öffnen: `http://<3DS-IP>:7496`
+            - Chatten! 🎉
